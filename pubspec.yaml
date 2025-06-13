@@ -44,6 +44,8 @@ dependencies:
   shared_preferences: ^2.2.0
   http: ^1.1.0
   http_parser: ^4.0.2
+  dio: ^5.3.2  # Use the latest version
+  connectivity_plus: ^5.0.2
 
 dev_dependencies:
   flutter_test:

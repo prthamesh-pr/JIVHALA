@@ -5,7 +5,6 @@ import 'dart:io';
 // Add these imports for API integration
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
 // Import for handling multipart requests for image upload
 import 'package:http_parser/http_parser.dart';
 
@@ -147,16 +146,6 @@ class _VehicleInPageState extends State<VehicleInPage> {
   
   // ========== API INTEGRATION ==========
   
-  /*
-  // UNCOMMENT THIS SECTION TO USE API FOR SAVING VEHICLE DATA
-  // REQUIREMENTS:
-  // 1. Add these packages to pubspec.yaml:
-  //    - http: ^1.1.0
-  //    - http_parser: ^4.0.2
-  // 2. Replace API_BASE_URL with your actual API endpoint
-  // 3. Ensure your backend can handle multipart form data for images
-  // 4. Add proper token handling for authenticated requests
-  
   Future<bool> _saveVehicleData() async {
     setState(() {
       _isLoading = true;
@@ -164,12 +153,11 @@ class _VehicleInPageState extends State<VehicleInPage> {
     });
     
     try {
-      // Get auth token from SharedPreferences
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('token');
+      // Use the provided token directly
+      final String token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4NDY4YzExYzU4MWY4NTU1MzM1M2Q1MCIsInVzZXJuYW1lIjoiYWRtaW4xIiwiaWF0IjoxNzQ5NDUzODU2LCJleHAiOjE3NDk1NDAyNTZ9.lx7m8R0kfTALVSAw2S-lqfMIxV1TF9E_mgorw2exEQU";
       
-      // Replace with your actual API endpoint
-      final String apiUrl = 'https://your-api-endpoint.com/api/vehicles';
+      // Use the specified API endpoint
+      final String apiUrl = 'http://localhost:5000/api/vehicles';
       
       // Format dates for API
       final String formattedInsuranceDate = _insuranceDate != null 
@@ -184,7 +172,7 @@ class _VehicleInPageState extends State<VehicleInPage> {
       
       // Add headers including auth token
       request.headers.addAll({
-        'Authorization': 'Bearer $token',
+        'Authorization': token,
         // Add any other required headers
       });
       
@@ -274,7 +262,6 @@ class _VehicleInPageState extends State<VehicleInPage> {
       return false;
     }
   }
-  */
   
   // Custom widget for text field rows with tap interaction
   Widget _buildTextFieldRow({
@@ -1018,8 +1005,7 @@ class _VehicleInPageState extends State<VehicleInPage> {
                       onPressed: _isLoading 
                       ? null 
                       : () {
-                        // UNCOMMENT THIS WHEN USING THE API
-                        /*
+                        // Use the API integration
                         _saveVehicleData().then((success) {
                           if (success) {
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -1043,9 +1029,9 @@ class _VehicleInPageState extends State<VehicleInPage> {
                             Navigator.pop(context);
                           }
                         });
-                        */
                         
-                        // Currently using mock success
+                        // Comment out the mock success as we're using the real API now
+                        /*
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Row(
@@ -1062,6 +1048,7 @@ class _VehicleInPageState extends State<VehicleInPage> {
                             ),
                           ),
                         );
+                        */
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.black,

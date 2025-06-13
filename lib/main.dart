@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http; // Add this import for API requests
-import 'dart:convert'; // Add this for JSON parsing
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'dart:async';
+import 'dart:io';
 import 'dashboard.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 void main() async {
   // Initialize Flutter binding
@@ -13,7 +17,6 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
   final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
   final username = prefs.getString('username') ?? '';
-  
   runApp(MyApp(isLoggedIn: isLoggedIn, username: username));
 }
 
@@ -53,6 +56,20 @@ class _LoginPageState extends State<LoginPage> {
   final _passwordController = TextEditingController();
   String? _errorMessage;
   bool _isLoading = false;
+  int _retryCount = 0;
+  final int _maxRetries = 2;
+  
+  // API URL configuration with platform detection
+  String get _baseUrl {
+    if (Platform.isAndroid) {
+      return 'http://10.0.2.2:5000'; // Android emulator
+    } else if (Platform.isIOS) {
+      return 'http://localhost:5000'; // iOS simulator
+    } else {
+      // For physical devices, you might want to set this manually
+      return 'http://192.168.1.100:5000'; // Replace with your actual IP
+    }
+  }
 
   @override
   void dispose() {
@@ -61,90 +78,181 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
-  // ========== AUTHENTICATION OPTIONS ==========
-
-  // OPTION 1: Mock authentication (currently active)
-  // Comment this out when you want to use the API authentication
-  Future<bool> _authenticate(String username, String password) async {
-    // Simulate network delay
-    await Future.delayed(Duration(seconds: 1));
-    
-    // For demo purposes - replace with your actual authentication logic
-    if (username == 'admin' && password == 'admin123') {
-      return true;
-    }
-    return false;
+  // Check network connectivity
+  Future<bool> _checkConnectivity() async {
+    var connectivityResult = await Connectivity().checkConnectivity();
+    return connectivityResult != ConnectivityResult.none;
   }
 
-  // OPTION 2: API authentication
-  // Uncomment this section to use real API authentication
-  /*
-  Future<bool> _authenticate(String username, String password) async {
-    // INTEGRATION REQUIREMENTS:
-    // 1. Add http package to pubspec.yaml: http: ^1.1.0
-    // 2. Add proper error handling for network issues
-    // 3. Store auth token if your API provides one
-    // 4. Modify response parsing based on your API structure
-
-    // Replace with your actual API endpoint
-    final String apiUrl = 'https://your-api-endpoint.com/api/login';
-    
+  // Improved server reachability check
+  Future<bool> _isServerReachable() async {
     try {
-      final response = await http.post(
-        Uri.parse(apiUrl),
-        headers: {
-          'Content-Type': 'application/json',
-          // Add any additional headers your API requires
-        },
-        body: jsonEncode({
-          'username': username,
-          'password': password,
-          // Add any additional fields your API requires
-        }),
-      );
+      // First try a direct HTTP connection
+      print('Checking server reachability at: $_baseUrl/api/auth/login');
+      final response = await http.get(
+        Uri.parse('$_baseUrl/api/auth/login'),
+        headers: {'Accept': 'application/json'}
+      ).timeout(const Duration(seconds: 5));
       
-      // Debug API response (remove in production)
-      print('API Response: ${response.body}');
+      print('Server reachability check: ${response.statusCode}');
+      return response.statusCode < 500; // Consider any non-server error as reachable
+    } on SocketException catch (e) {
+      print('Socket connection failed: $e');
+      return false;
+    } on TimeoutException catch (e) {
+      print('Connection timed out: $e');
       
-      if (response.statusCode == 200) {
-        final Map<String, dynamic> data = jsonDecode(response.body);
-        
-        // Adjust this based on your API's response structure
-        if (data['success'] == true) {
-          // If your API returns a token, save it for future requests
-          if (data['token'] != null) {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setString('token', data['token']);
-          }
+      // Try an alternative URL if the primary one fails
+      try {
+        // For Android emulator, try a different approach
+        if (Platform.isAndroid) {
+          final alternativeUrl = 'http://localhost:5000';
+          print('Trying alternative URL: $alternativeUrl/api/auth/login');
           
-          return true;
-        } else {
-          setState(() {
-            _errorMessage = data['message'] ?? 'Authentication failed';
-          });
+          final response = await http.get(
+            Uri.parse('$alternativeUrl/api/auth/login'),
+            headers: {'Accept': 'application/json'}
+          ).timeout(const Duration(seconds: 5));
+          
+          print('Alternative server check: ${response.statusCode}');
+          return response.statusCode < 500;
         }
-      } else if (response.statusCode == 401) {
-        setState(() {
-          _errorMessage = 'Invalid credentials';
-        });
-      } else {
-        setState(() {
-          _errorMessage = 'Server error: ${response.statusCode}';
-        });
+      } catch (e) {
+        print('Alternative connection also failed: $e');
       }
       
       return false;
     } catch (e) {
-      print('Authentication error: $e');
+      print('Server reachability error: $e');
+      return false;
+    }
+  }
+
+  Future<bool> _authenticate(String username, String password) async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    // First check network connectivity
+    bool hasNetwork = await _checkConnectivity();
+    if (!hasNetwork) {
       setState(() {
-        _errorMessage = 'Network error. Please check your connection.';
+        _errorMessage = 'No internet connection. Please check your network.';
+        _isLoading = false;
+      });
+      return false;
+    }
+
+    // Then check if server is reachable
+    bool isServerUp = await _isServerReachable();
+    if (!isServerUp) {
+      setState(() {
+        _errorMessage = 'Cannot reach server. Please check if the server is running.';
+        _isLoading = false;
+      });
+      return false;
+    }
+
+    try {
+      final loginUrl = '$_baseUrl/api/auth/login';
+      
+      print('Connecting to API: $loginUrl');
+      
+      // Prepare request body
+      final requestBody = json.encode({
+        'username': username,
+        'password': password,
+      });
+      
+      // Make the API request
+      final response = await http.post(
+        Uri.parse(loginUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: requestBody,
+      ).timeout(const Duration(seconds: 10));
+      
+      print('API Response Status: ${response.statusCode}');
+      
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        // Parse response
+        final dynamic data = json.decode(response.body);
+        print('API Response Body: $data');
+        
+        // Extract token from response
+        final String? token = data['token'] as String?;
+        
+        if (token != null) {
+          print('Token received from API');
+          
+          // Save token to SharedPreferences
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('token', token);
+          await prefs.setBool('isLoggedIn', true);
+          await prefs.setString('username', username);
+          
+          // Also store user data if available
+          if (data is Map && data['user'] is Map) {
+            final userData = json.encode(data['user']);
+            await prefs.setString('userData', userData);
+          }
+          
+          setState(() {
+            _isLoading = false;
+          });
+          return true;
+        } else {
+          setState(() {
+            _errorMessage = 'Authentication failed: Invalid response format';
+            _isLoading = false;
+          });
+        }
+      } else if (response.statusCode == 401) {
+        setState(() {
+          _errorMessage = 'Invalid username or password';
+          _isLoading = false;
+        });
+      } else if (response.statusCode == 404) {
+        setState(() {
+          _errorMessage = 'API endpoint not found. Please check server configuration.';
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _errorMessage = 'Server error: ${response.statusCode}';
+          _isLoading = false;
+        });
+      }
+      return false;
+    } catch (e) {
+      print('Authentication error: $e');
+      
+      // Implement retry logic for connection issues
+      if (_retryCount < _maxRetries) {
+        _retryCount++;
+        print('Retrying connection, attempt $_retryCount of $_maxRetries');
+        await Future.delayed(Duration(seconds: 1));
+        return _authenticate(username, password);
+      }
+      
+      // Reset retry count after exhausting retries
+      _retryCount = 0;
+      
+      setState(() {
+        _errorMessage = 'An unexpected error occurred: $e';
+        _isLoading = false;
       });
       return false;
     }
   }
-  */
 
   void _login() async {
+    // Hide keyboard
+    FocusScope.of(context).unfocus();
+    
     // Basic validation
     if (_usernameController.text.isEmpty || _passwordController.text.isEmpty) {
       setState(() {
@@ -152,49 +260,26 @@ class _LoginPageState extends State<LoginPage> {
       });
       return;
     }
-
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
-    try {
-      bool success = await _authenticate(
-        _usernameController.text, 
-        _passwordController.text
-      );
+    
+    // Reset retry count before attempting login
+    _retryCount = 0;
+    
+    // Authenticate with the backend
+    bool success = await _authenticate(
+      _usernameController.text, 
+      _passwordController.text
+    );
       
-      if (success) {
-        // Save login state to SharedPreferences
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool('isLoggedIn', true);
-        await prefs.setString('username', _usernameController.text);
-        
-        // DON'T store passwords in SharedPreferences in a real app!
-        // This is just for demonstration purposes
-        // Instead, store authentication tokens from your API
-        await prefs.setString('password', _passwordController.text);
-        
-        // Navigate to dashboard on successful login
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => DashboardPage(
-              username: _usernameController.text,
-            ),
+    if (success) {
+      // Navigate to dashboard on successful login
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => DashboardPage(
+            username: _usernameController.text,
           ),
-        );
-      } else {
-        setState(() {
-          _isLoading = false;
-          _errorMessage = 'Invalid username or password';
-        });
-      }
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = 'An error occurred. Please try again.';
-      });
+        ),
+      );
     }
   }
 
@@ -356,22 +441,22 @@ class _LoginPageState extends State<LoginPage> {
                 ),
                 const SizedBox(height: 80),
                 // Footer
-                Text(
-                  'Designed and developed by',
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  height: 40,
-                  width: 100,   
-                  child: Image.asset(
-                    'assets/logo/Group 1.png',
-                    fit: BoxFit.contain,
-                  ),
-                ),
+                // Text(
+                //   'Designed and developed by',
+                //   style: GoogleFonts.poppins(
+                //     fontSize: 12,
+                //     color: Colors.grey[600],
+                //   ),
+                // ),
+                // const SizedBox(height: 8),
+                // SizedBox(
+                //   height: 40,
+                //   width: 100,   
+                //   child: Image.asset(
+                //     'assets/logo/Group 1.png',
+                //     fit: BoxFit.contain,
+                //   ),
+                // ),
                 const SizedBox(height: 25),
               ],
             ),
